@@ -366,6 +366,7 @@
   },
   "dependencies": {
     "linq-collections": "*",
-    "vscode-nls": "^2.0.2"
+    "vscode-nls": "^2.0.2",
+    "jszip": "*"
   }
 }

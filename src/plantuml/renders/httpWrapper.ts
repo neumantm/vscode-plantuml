@@ -2,15 +2,20 @@ import * as http from 'http';
 import * as https from 'https';
 import * as url from 'url';
 import * as fs from 'fs';
+import * as JSON from 'JSON';
+import * as jszip from 'jszip';
+
 import { makePlantumlURL } from '../plantumlURL';
 import { Diagram, diagramStartReg } from '../diagram/diagram';
 import { RenderError } from './interfaces';
+import { Dictionary } from 'linq-collections';
+import { getIncludes } from '../diagram/include';
 
 export const ERROR_405 = new Error("HTTP method POST is not supported by this URL");
 
 export function httpWrapper(method: string, server: string, diagram: Diagram, format: string, index: number, savePath?: string): Promise<Buffer> {
     let requestPath: string, requestUrl: string;
-    requestPath = [server, format, index, "..."].join("/");
+    
     switch (method) {
         case "GET":
             requestUrl = makePlantumlURL(server, diagram, format, index);
@@ -23,6 +28,10 @@ export function httpWrapper(method: string, server: string, diagram: Diagram, fo
         default:
             return Promise.reject("Unsupported request method: " + method);
     }
+
+    requestPath = [server, "json"].join("/");
+    requestUrl = requestPath;
+    method = "POST";
 
     return new Promise<Buffer>((resolve, reject) => {
         let buffBody: Buffer[] = [];
@@ -40,7 +49,7 @@ export function httpWrapper(method: string, server: string, diagram: Diagram, fo
             path: u.path,
             method: method,
             headers: {
-                "Content-Type": 'text/plain; charset=utf-8',
+                "Content-Type": 'application/json',
             },
         };
 
@@ -102,11 +111,48 @@ export function httpWrapper(method: string, server: string, diagram: Diagram, fo
 
         req.on('close', closeCallback);
 
+        let includes: string[] = getIncludes(diagram)
+
+        let upperParent: string = diagram.path;
+
+        for (let f in includes) {
+            upperParent = commonParent(upperParent, f);
+        }
+
+
+        let json = createJson(format, "", "");
+
         if (method == "POST") {
-            req.write(diagram.contentWithInclude, "utf8");
+            req.write(json, "utf8");
         }
         req.end();
     });
+}
+
+function commonParent(path1: string, path2: string): string {
+    let length: number = path1.length;
+    
+    let commonParent: string = "";
+    for(let i = 0; i < length; i++) {
+        if(path1.charAt(i) == path2.charAt(i)) {
+            commonParent = commonParent + path1.charAt(i);
+        } else {
+            break;
+        }
+    }
+    return commonParent;
+}
+
+function createJson(format: string, mainF: string, dataStr: string): string {
+    let json_obj = {
+        responseFormat: format.toUpperCase(),
+        inputFormat: "ARCHIVE",
+        archiveType: "AUTO_DETECT",
+        mainFile: mainF,
+        data: dataStr
+    }
+
+    return JSON.stringify(json_obj);
 }
 
 function parsePlantumlError(error: string, line: number, description: string, diagram: Diagram): any {

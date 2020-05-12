@@ -6,54 +6,35 @@ import { config } from "../config";
 
 // http://plantuml.com/en/preprocessing
 const INCLUDE_REG = /^\s*!(include(?:sub)?)\s+(.+?)(?:!(\w+))?$/i;
-const STARTSUB_TEST_REG = /^\s*!startsub\s+(\w+)/i;
-const ENDSUB_TEST_REG = /^\s*!endsub\b/i;
 
-const START_DIAGRAM_REG = /(^|\r?\n)\s*@start.*\r?\n/i;
-const END_DIAGRAM_REG = /\r?\n\s*@end.*(\r?\n|$)(?!.*\r?\n\s*@end.*(\r?\n|$))/i;
 
-interface FileSubBlocks {
-    [key: string]: string[];
-}
-
-interface DictIncluded {
-    [key: string]: boolean;
-}
-
-let _included: DictIncluded = {};
-let _route: string[] = []
-
-export function getContentWithInclude(diagram: Diagram): string {
-    _included = {};
-    if (diagram.parentUri) {
-        _route = [diagram.parentUri.fsPath];
-    } else {
-        _route = [];
-    }
+export function getIncludes(diagram: Diagram): string[] {
     // console.log('Start from:', _route[0]);
     let searchPaths = getSearchPaths(diagram.parentUri);
-    return resolveInclude(diagram.lines, searchPaths);
+    let foundIncludeds:string[] = [];
+    findIncludes(diagram.lines, searchPaths, foundIncludeds);
+    return foundIncludeds;
 }
 
-function resolveInclude(content: string | string[], searchPaths: string[]): string {
+function findIncludes(content: string | string[], searchPaths: string[], foundIncludeds: string[]): void {
     let lines = content instanceof Array ? content : content.split('\n');
-    let processedLines = lines.map(line => line.replace(
-        INCLUDE_REG,
-        (match: string, ...args: string[]) => {
-            let Action = args[0].toLowerCase();
-            let target = args[1].trim();
-            let sub = args[2];
-            let file = path.isAbsolute(target) ? target : findFile(target, searchPaths);
-            let result: string;
-            if (Action == "include") {
-                result = getIncludeContent(file);
-            } else {
-                result = getIncludesubContent(file, sub);
+
+    lines.filter((line: string) => (line.match(INCLUDE_REG) != null)).forEach(
+        (line: string) => line.replace( //TODO: Fix to don't abuse replace
+            INCLUDE_REG,
+            (match: string, ...args: string[]) => { 
+                let Action = args[0].toLowerCase();
+                let target = args[1].trim();
+                let sub = args[2];
+                let file = path.isAbsolute(target) ? target : findFile(target, searchPaths);
+                if (foundIncludeds.indexOf(file) == -1)  {
+                    foundIncludeds.push(file)
+                    findIncludesInIncluded(file, foundIncludeds);
+                }
+                return "";
             }
-            return result === undefined ? match : result;
-        }
-    ));
-    return processedLines.join('\n');
+        )
+    );
 }
 
 function getSearchPaths(uri: vscode.Uri): string[] {
@@ -76,93 +57,9 @@ function findFile(file: string, searchPaths: string[]): string {
     return undefined;
 }
 
-function getIncludeContent(file: string): string {
-    if (!file) return undefined
-    // console.log('Entering:', file);
-    if (_included[file]) {
-        // console.log("Ignore file already included:", file);
-        return "";
-    }
-    _route.push(file);
-    // TODO: read from editor for unsave changes
+function findIncludesInIncluded(file: string, foundIncludeds: string[]): void {
+    if (!file) return
+
     let content = fs.readFileSync(file).toString();
-    _included[file] = true;
-    let result = resolveInclude(content, getSearchPaths(vscode.Uri.file(file)));
-    _route.pop();
-    // console.log('Leaving:', file);
-
-    result = result.replace(START_DIAGRAM_REG, "$1");
-    result = result.replace(END_DIAGRAM_REG, "$1");
-
-    return result;
-}
-
-function getIncludesubContent(file: string, sub: string): string {
-    if (!file || !sub) return undefined
-    let identifier = `${file}!${sub}`;
-    // // Disable sub block duplication check, to keep same behavior with PlantUML project
-    // if (included[file]) {
-    //     // console.log("ignore block already included:", file);
-    //     return "";
-    // }
-    // console.log('Entering:', identifier);
-    let find = findInArray(_route, identifier);
-    if (find >= 0) {
-        throw 'Include loop detected!' + '\n\n' + makeLoopInfo(find);
-    }
-    _route.push(identifier);
-    let result: string = undefined;
-    let blocks = getSubBlocks(file);
-    if (blocks) {
-        // included[identifier] = true;
-        result = resolveInclude(blocks[sub], getSearchPaths(vscode.Uri.file(file)));
-    }
-    _route.pop();
-    // console.log('Leaving:', identifier);
-    return result;
-}
-
-function getSubBlocks(file: string): FileSubBlocks {
-    if (!file) return {};
-    let blocks: FileSubBlocks = {};
-    // TODO: read from editor for unsave changes
-    let lines = fs.readFileSync(file).toString().split('\n');
-    let subName = "";
-    let match: RegExpMatchArray;
-    for (let line of lines) {
-        match = STARTSUB_TEST_REG.exec(line);
-        if (match) {
-            subName = match[1];
-            continue;
-        } else if (ENDSUB_TEST_REG.test(line)) {
-            subName = "";
-            continue;
-        } else {
-            if (subName) {
-                if (!blocks[subName]) blocks[subName] = [];
-                blocks[subName].push(line);
-            }
-        }
-    }
-    return blocks;
-}
-
-function findInArray<T>(arr: T[], find: T): number {
-    for (let i = 0; i < arr.length; i++) {
-        if (arr[i] == find) return i;
-    }
-    return -1;
-}
-
-function makeLoopInfo(loopID: number): string {
-    let lines: string[] = [];
-    for (let i = 0; i < loopID; i++) {
-        lines.push(_route[i]);
-    }
-    lines.push('|-> ' + _route[loopID]);
-    for (let i = loopID + 1; i < _route.length - 1; i++) {
-        lines.push('|   ' + _route[loopID]);
-    }
-    lines.push('|<- ' + _route[_route.length - 1]);
-    return lines.join('\n');
+    let result = findIncludes(content, getSearchPaths(vscode.Uri.file(file)), foundIncludeds);
 }
